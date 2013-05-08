@@ -16,7 +16,13 @@
 #include "column.h"
 #include "color.h"
 
+#define CLEAN_OPTS_SHOW_IGNORED		01
+#define CLEAN_OPTS_IGNORED_ONLY		02
+#define CLEAN_OPTS_REMOVE_DIRECTORIES	04
+#define CLEAN_OPTS_REMOVE_NESTED_GIT	010
+
 static int force = -1; /* unset */
+static int clean_flags = 0;
 static int interactive;
 static struct string_list del_list = STRING_LIST_INIT_DUP;
 static unsigned int colopts;
@@ -868,7 +874,6 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	int i, res;
 	int dry_run = 0, remove_directories = 0, quiet = 0, ignored = 0;
 	int ignored_only = 0, config_set = 0, errors = 0, gone = 1;
-	int rm_flags = REMOVE_DIR_KEEP_NESTED_GIT;
 	struct strbuf abs_path = STRBUF_INIT;
 	struct dir_struct dir;
 	static const char **pathspec;
@@ -902,13 +907,6 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	argc = parse_options(argc, argv, prefix, options, builtin_clean_usage,
 			     0);
 
-	memset(&dir, 0, sizeof(dir));
-	if (ignored_only)
-		dir.flags |= DIR_SHOW_IGNORED;
-
-	if (ignored && ignored_only)
-		die(_("-x and -X cannot be used together"));
-
 	if (interactive) {
 		if (!isatty(0) || !isatty(1))
 			die(_("interactive clean can not run without a valid tty; "
@@ -922,15 +920,29 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 				  "refusing to clean"));
 	}
 
-	if (force > 1)
-		rm_flags = 0;
-
-	dir.flags |= DIR_SHOW_OTHER_DIRECTORIES;
-
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
 
-	if (!ignored)
+	if (force > 1)
+		clean_flags |= CLEAN_OPTS_REMOVE_NESTED_GIT;
+	if (ignored)
+		clean_flags |= CLEAN_OPTS_SHOW_IGNORED;
+	if (ignored_only)
+		clean_flags |= CLEAN_OPTS_IGNORED_ONLY;
+	if (remove_directories)
+		clean_flags |= CLEAN_OPTS_REMOVE_DIRECTORIES;
+
+	memset(&dir, 0, sizeof(dir));
+	if (clean_flags & CLEAN_OPTS_IGNORED_ONLY)
+		dir.flags |= DIR_SHOW_IGNORED;
+
+	if (clean_flags & CLEAN_OPTS_IGNORED_ONLY &&
+	    clean_flags & CLEAN_OPTS_SHOW_IGNORED)
+		die(_("-x and -X cannot be used together"));
+
+	dir.flags |= DIR_SHOW_OTHER_DIRECTORIES;
+
+	if (!(clean_flags & CLEAN_OPTS_SHOW_IGNORED))
 		setup_standard_excludes(&dir);
 
 	el = add_exclude_list(&dir, EXC_CMDL, "--exclude option");
@@ -980,7 +992,8 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		}
 
 		if (S_ISDIR(st.st_mode)) {
-			if (remove_directories || (matches == MATCHED_EXACTLY)) {
+			if ((clean_flags & CLEAN_OPTS_REMOVE_DIRECTORIES) ||
+			    (matches == MATCHED_EXACTLY)) {
 				rel = path_relative(ent->name, prefix);
 				string_list_append(&del_list, rel);
 			}
@@ -1012,7 +1025,10 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 			continue;
 
 		if (S_ISDIR(st.st_mode)) {
-			if (remove_dirs(&abs_path, prefix, rm_flags, dry_run, quiet, &gone))
+			if (remove_dirs(&abs_path, prefix,
+					clean_flags & CLEAN_OPTS_REMOVE_NESTED_GIT ?
+						0 : REMOVE_DIR_KEEP_NESTED_GIT,
+					dry_run, quiet, &gone))
 				errors++;
 			if (gone && !quiet) {
 				qname = quote_path_relative(item->string, -1, &buf, NULL);
